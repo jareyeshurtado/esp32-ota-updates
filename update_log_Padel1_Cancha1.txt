@@ -1,0 +1,1 @@
+{"boardID":"Padel1_Cancha1","updateType":"Firmware","timestamp":"17:16:45","status":"Success"}

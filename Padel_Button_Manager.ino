@@ -9,7 +9,7 @@
 #include "mbedtls/base64.h"
 
 #define FILESYSTEM LittleFS
-#define FIRMWAREVERSION "v0.2"
+#define FIRMWAREVERSION "v0.3"
 
 const char* configFilePath = "/config.json";  // Path for the configuration file
 const char* gitLogUrl = "https://api.github.com/repos/jareyeshurtado/esp32-ota-updates/contents/";
@@ -30,12 +30,15 @@ unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 5000;
 
 String ssid, password, boardID, postUrl;
+String padelName, courtNr;
 
 void setup() {
   Serial.begin(115200);
 
   pinMode(STATUS_LED_BUILTIN, OUTPUT);  // Set status LED as output
   digitalWrite(STATUS_LED_BUILTIN, LOW);  // Default to LOW (not ready)
+  pinMode(timestampButton, INPUT_PULLUP);
+  pinMode(updateButton, INPUT_PULLUP);
 
   if (!FILESYSTEM.begin(true)) {
     Serial.println("Failed to mount file system");
@@ -52,9 +55,8 @@ void setup() {
     return;
   }
 
-  pinMode(timestampButton, INPUT_PULLUP);
-  pinMode(updateButton, INPUT_PULLUP);
   connectToWiFi();
+  extractPadelNameAndCourtNr();
   timeClient.begin();
   client.setInsecure();
 }
@@ -175,7 +177,8 @@ void sendPostRequest() {
 
 void checkForFirmwareUpdate() {
   String updateUrl = "https://raw.githubusercontent.com/jareyeshurtado/esp32-ota-updates/main/Padel_Button_Manager.ino.bin";
-  String configUrl = "https://raw.githubusercontent.com/jareyeshurtado/esp32-ota-updates/main/config.json";
+  String configUrl = "https://raw.githubusercontent.com/jareyeshurtado/esp32-ota-updates/main/" + padelName + "/config_" + courtNr + ".json";
+                     
   digitalWrite(STATUS_LED_BUILTIN, LOW);
   Serial.println("Logging firmware update attempt...");
 
@@ -214,16 +217,16 @@ bool logUpdateStatus(const String& updateType, bool success) {
   String currentTime = getCurrentDateTime();
   String logPayload;
   String shaValue;
-  String folderName, logFileName;
+//  String folderName, logFileName;
 
-  int underscoreIndex = boardID.indexOf('_');
-  if (underscoreIndex != -1) {
-    folderName = boardID.substring(0, underscoreIndex);
-    logFileName = "update_log_" + boardID.substring(underscoreIndex + 1) + ".txt";
-  } else {
-    folderName = "default";
-    logFileName = "update_log.txt";
-  }
+//  int underscoreIndex = boardID.indexOf('_');
+//  if (underscoreIndex != -1) {
+//    folderName = boardID.substring(0, underscoreIndex);
+//    logFileName = "update_log_" + boardID.substring(underscoreIndex + 1) + ".txt";
+//  } else {
+//    folderName = "default";
+//    logFileName = "update_log.txt";
+//  }
 
   String entry = "update @ " + currentTime + "\n";
   entry += updateType + ": " + (success ? "Success" : "Failed") + "\n";
@@ -231,7 +234,7 @@ bool logUpdateStatus(const String& updateType, bool success) {
   bool fileExists = false;
   String existingContent;
 
-  if (http.begin(client, gitLogUrl + folderName + "/" + logFileName)) {
+  if (http.begin(client, gitLogUrl + padelName + "/updlog_" + courtNr + ".log")) {
     http.addHeader("Authorization", "token " + String(gitToken));
     int getResponseCode = http.GET();
 
@@ -265,7 +268,7 @@ bool logUpdateStatus(const String& updateType, bool success) {
     existingContent = entry;
   }
 
-  if (http.begin(client, gitLogUrl + folderName + "/" + logFileName)) {
+  if (http.begin(client, gitLogUrl + padelName + "/updlog_" + courtNr + ".log")) {
     http.addHeader("Content-Type", "application/json");
     http.addHeader("Authorization", "token " + String(gitToken));
 
@@ -337,4 +340,16 @@ bool loadGitKey() {
 
   file.close();
   return true;
+}
+
+void extractPadelNameAndCourtNr(){
+  // Extract Padel Name and Court Nr from boardID file
+  int underscoreIndex = boardID.indexOf('_');
+  if (underscoreIndex != -1) {
+    padelName = boardID.substring(0, underscoreIndex);
+    courtNr = boardID.substring(underscoreIndex + 1);
+  } else {
+    padelName = "default";
+    courtNr = "default";
+  }
 }

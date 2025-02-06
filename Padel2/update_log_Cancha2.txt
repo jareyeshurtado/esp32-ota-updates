@@ -1,4 +1,0 @@
-update @ 06/02/2025 01:11:38
-Firmware: Success
-update @ 06/02/2025 01:11:40
-Config: Success

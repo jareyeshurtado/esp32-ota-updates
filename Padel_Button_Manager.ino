@@ -198,7 +198,7 @@ void checkForFirmwareUpdate() {
         configFile.print(newConfig);
         configFile.close();
         Serial.println("Config updated!");
-        logUpdateStatus("Config", true);
+        logUpdateStatus("Config", false);
       }
     }
     http.end();
@@ -213,7 +213,7 @@ void checkForFirmwareUpdate() {
   }
 }
 
-bool logUpdateStatus(const String& updateType, bool success) {
+bool logUpdateStatus(const String& updateType, bool logTime) {
   String currentTime = getCurrentDateTime();
   String logPayload;
   String shaValue;
@@ -228,8 +228,8 @@ bool logUpdateStatus(const String& updateType, bool success) {
 //    logFileName = "update_log.txt";
 //  }
 
-  String entry = "update @ " + currentTime + "\n";
-  entry += updateType + ": " + (success ? "Success" : "Failed") + "\n";
+  String entry = logTime ? "update @ " + currentTime + "\n" : " ";
+  entry += "   " + updateType + ": " + "Success" + "\n";
 
   bool fileExists = false;
   String existingContent;

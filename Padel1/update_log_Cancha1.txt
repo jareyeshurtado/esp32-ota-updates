@@ -1,2 +1,4 @@
 update @ 21:28:53
 Firmware: Success
+update @ 21:28:56
+Config: Success

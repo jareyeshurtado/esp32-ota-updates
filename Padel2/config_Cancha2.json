@@ -3,5 +3,7 @@
   "ssid": "Totalplay-20B0",
   "password": "20B0D698AE3MCKeG",
   "postUrl": "https://www.whafin.com/api/pepe",
-  "boardID": "Padel2_Cancha1"
+  "boardID": "Padel2_Cancha1",
+  "updHour": 11,
+  "updMinute": 30
 }

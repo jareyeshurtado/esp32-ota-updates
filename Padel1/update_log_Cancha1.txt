@@ -1,2 +1,3 @@
 {"boardID":"Padel1_Cancha1","updateType":"Firmware","timestamp":"00:28:20","status":"Success"}
 {"boardID":"Padel1_Cancha1","updateType":"Config","timestamp":"00:28:22","status":"Success"}
+{"boardID":"Padel1_Cancha1","updateType":"Firmware","timestamp":"20:38:13","status":"Success"}

@@ -9,7 +9,10 @@
 #include "mbedtls/base64.h"
 
 #define FILESYSTEM LittleFS
-#define FIRMWAREVERSION "v0.3"
+#define FIRMWAREVERSION "v0.4"
+
+#define MANUAL_UPDATE 0
+#define TIME_UPDATE   1
 
 const char* configFilePath = "/config.json";  // Path for the configuration file
 const char* gitLogUrl = "https://api.github.com/repos/jareyeshurtado/esp32-ota-updates/contents/";
@@ -30,11 +33,12 @@ unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 5000;
 
 String ssid, password, boardID, postUrl;
+int updHour, updMinute;
 String padelName, courtNr;
 
 void setup() {
   Serial.begin(115200);
-
+  Serial.println(String("..... Starting Software : ") + FIRMWAREVERSION);
   pinMode(STATUS_LED_BUILTIN, OUTPUT);  // Set status LED as output
   digitalWrite(STATUS_LED_BUILTIN, LOW);  // Default to LOW (not ready)
   pinMode(timestampButton, INPUT_PULLUP);
@@ -56,26 +60,21 @@ void setup() {
   }
 
   connectToWiFi();
-  extractPadelNameAndCourtNr();
   timeClient.begin();
+  timeClient.update();  // Initial sync
+  validateAndSyncTime();  // Ensure valid time at startup
+  extractPadelNameAndCourtNr();
   client.setInsecure();
 }
 
 void loop() {
-  static int lastDayChecked = -1;
-  static bool initialSyncDone = false;
   timeClient.update();
-  int currentDay = timeClient.getDay();
+  validateAndSyncTime();  // Check and correct invalid time
   bool CheckedForUpdate = false;
 
   int timestampButtonState = digitalRead(timestampButton);
   int updateButtonState = digitalRead(updateButton);
 
-  if (!initialSyncDone && timeClient.getEpochTime() > 0) {
-    lastDayChecked = currentDay;
-    initialSyncDone = true;
-    Serial.println("Initial time sync complete.");
-  }
 
   if (timestampButtonState == LOW && (millis() - lastDebounceTime) > debounceDelay) {
     lastDebounceTime = millis();
@@ -92,18 +91,16 @@ void loop() {
     if (!buttonPressed) {
       buttonPressed = true;
       Serial.println("Checking for firmware and config updates Due To Button Pressed...");
-      checkForFirmwareUpdate();
-      lastDayChecked = currentDay;
+      checkForFirmwareUpdate(MANUAL_UPDATE);
       CheckedForUpdate = true;
     }
   } else if (updateButtonState == HIGH) {
     buttonPressed = false;
   }
 
-  if (currentDay != lastDayChecked && timeClient.getHours() == 0) {
-    Serial.println("Checking for firmware and config updates...");
-    checkForFirmwareUpdate();
-    lastDayChecked = currentDay;
+  if (timeClient.getHours() == updHour && timeClient.getMinutes() == updMinute) {
+    Serial.println("Checking for firmware and config updates due to Time Chosen in Config...");
+    checkForFirmwareUpdate(TIME_UPDATE);
     CheckedForUpdate = true;
   }
   if (CheckedForUpdate) {
@@ -130,11 +127,17 @@ bool loadConfig() {
   password = jsonDoc["password"].as<String>();
   boardID = jsonDoc["boardID"].as<String>();
   postUrl = jsonDoc["postUrl"].as<String>();
+  updHour = jsonDoc["updHour"].as<int>();
+  updMinute = jsonDoc["updMinute"].as<int>();
 
   Serial.println("Config loaded:");
   Serial.println("SSID: " + ssid);
   Serial.println("Board ID: " + boardID);
   Serial.println("Post URL: " + postUrl);
+  Serial.print("update daily time ");
+  Serial.print(updHour);
+  Serial.print(":");
+  Serial.println(updMinute);
 
   file.close();
   return true;
@@ -175,7 +178,7 @@ void sendPostRequest() {
   }
 }
 
-void checkForFirmwareUpdate() {
+void checkForFirmwareUpdate(int updReason) {
   String updateUrl = "https://raw.githubusercontent.com/jareyeshurtado/esp32-ota-updates/main/Padel_Button_Manager.ino.bin";
   String configUrl = "https://raw.githubusercontent.com/jareyeshurtado/esp32-ota-updates/main/" + padelName + "/config_" + courtNr + ".json";
                      
@@ -183,7 +186,7 @@ void checkForFirmwareUpdate() {
   Serial.println("Logging firmware update attempt...");
 
   // Log the firmware update first
-  if (!logUpdateStatus("Firmware", true)) {
+  if (!logUpdateStatus("Firmware", true, updReason)) {
     Serial.println("Failed to log firmware update status. Aborting OTA update.");
     return;  // Avoid OTA if logging fails
   }
@@ -198,7 +201,7 @@ void checkForFirmwareUpdate() {
         configFile.print(newConfig);
         configFile.close();
         Serial.println("Config updated!");
-        logUpdateStatus("Config", false);
+        logUpdateStatus("Config", false, updReason);
       }
     }
     http.end();
@@ -211,45 +214,68 @@ void checkForFirmwareUpdate() {
   if (result != HTTP_UPDATE_OK) {
     Serial.println("Firmware update failed: " + String(httpUpdate.getLastErrorString()));
   }
+
+  Serial.println("Firmware update complete. Synchronizing NTP...");
+  timeClient.end();  // Stop any previous NTP activity
+  timeClient.begin();  // Start fresh
+  timeClient.update();  // Force immediate sync
 }
 
-bool logUpdateStatus(const String& updateType, bool logTime) {
+void validateAndSyncTime() {
+  time_t now = timeClient.getEpochTime();
+  if (now < 946684800 || now > 1893456000) {  // Check if time is outside 2000 to 2030 range
+    Serial.println("Invalid time detected, forcing NTP sync...");
+    timeClient.update();  // Force sync
+  }
+}
+
+bool logUpdateStatus(const String& updateType, bool logTime, int updReason) {
   String currentTime = getCurrentDateTime();
-  String logPayload;
   String shaValue;
-//  String folderName, logFileName;
+  String updReasonStr;
+  String date;
 
-//  int underscoreIndex = boardID.indexOf('_');
-//  if (underscoreIndex != -1) {
-//    folderName = boardID.substring(0, underscoreIndex);
-//    logFileName = "update_log_" + boardID.substring(underscoreIndex + 1) + ".txt";
-//  } else {
-//    folderName = "default";
-//    logFileName = "update_log.txt";
-//  }
+  if (updReason == MANUAL_UPDATE) {
+    updReasonStr = "Manual Update"; 
+  } else if (updReason == TIME_UPDATE) {
+    updReasonStr = "Time Based Update"; 
+  } else {
+    updReasonStr = "Unknown Reason"; 
+  }
 
-  String entry = logTime ? "update @ " + currentTime + "\n" : " ";
+  String entry = logTime ? "update @ " + currentTime + " Reason: " + updReasonStr + "\n" : " ";
   entry += "   " + updateType + ": " + "Success" + "\n";
+
+  int spaceIndex = currentTime.indexOf(' ');
+  date = (spaceIndex != -1) ? currentTime.substring(0, spaceIndex) : "Unknown";
 
   bool fileExists = false;
   String existingContent;
 
-  if (http.begin(client, gitLogUrl + padelName + "/updlog_" + courtNr + ".log")) {
+  if (http.begin(client, gitLogUrl + padelName + "/upd_" + courtNr + "_" + date + ".log")) {
     http.addHeader("Authorization", "token " + String(gitToken));
     int getResponseCode = http.GET();
 
     if (getResponseCode == 200) {
       String response = http.getString();
-      StaticJsonDocument<512> jsonResponse;
+      StaticJsonDocument<1024> jsonResponse;
       deserializeJson(jsonResponse, response);
       shaValue = jsonResponse["sha"].as<String>();
       String encodedContent = jsonResponse["content"].as<String>();
-      size_t decodedLen;
-      unsigned char decodedOutput[512];
-      mbedtls_base64_decode(decodedOutput, sizeof(decodedOutput), &decodedLen, (const unsigned char*)encodedContent.c_str(), encodedContent.length());
+
+      size_t decodedLen = 0;
+      unsigned char* decodedOutput = (unsigned char*)malloc(4096);  // Heap allocation
+      if (decodedOutput == nullptr) {
+        Serial.println("Memory allocation failed!");
+        return false;
+      }
+
+      mbedtls_base64_decode(decodedOutput, 4096, &decodedLen,
+                            (const unsigned char*)encodedContent.c_str(), encodedContent.length());
       existingContent = String((char*)decodedOutput, decodedLen);
+      free(decodedOutput);  // Free memory
       fileExists = true;
-      http.end();  // Close GET request
+      http.end();
     } else if (getResponseCode == 404) {
       Serial.println("Log file does not exist. Creating a new one.");
       fileExists = false;
@@ -261,20 +287,28 @@ bool logUpdateStatus(const String& updateType, bool logTime) {
     }
   }
 
-  if (fileExists) {
-    existingContent.trim();
-    existingContent += "\n" + entry;
-  } else {
-    existingContent = entry;
+  existingContent.trim();
+  existingContent += "\n" + entry;
+
+  size_t encodedLen = 0;
+  unsigned char* encodedOutput = (unsigned char*)malloc(8192);  // Heap allocation
+  if (encodedOutput == nullptr) {
+    Serial.println("Memory allocation failed!");
+    return false;
   }
 
-  if (http.begin(client, gitLogUrl + padelName + "/updlog_" + courtNr + ".log")) {
+  mbedtls_base64_encode(encodedOutput, 8192, &encodedLen,
+                        (const unsigned char*)existingContent.c_str(), existingContent.length());
+  String encodedContent = String((char*)encodedOutput, encodedLen);
+  free(encodedOutput);  // Free memory
+
+  if (http.begin(client, gitLogUrl + padelName + "/upd_" + courtNr + "_" + date + ".log")) {
     http.addHeader("Content-Type", "application/json");
     http.addHeader("Authorization", "token " + String(gitToken));
 
-    StaticJsonDocument<512> updatePayload;
+    StaticJsonDocument<1024> updatePayload;
     updatePayload["message"] = "ESP32 update log";
-    updatePayload["content"] = base64Encode(existingContent);
+    updatePayload["content"] = encodedContent;
     if (fileExists) {
       updatePayload["sha"] = shaValue;
     }
@@ -282,8 +316,6 @@ bool logUpdateStatus(const String& updateType, bool logTime) {
     String requestBody;
     serializeJson(updatePayload, requestBody);
 
-  //  Serial.println("JSON Payload to GitHub:");
-  //  Serial.println(requestBody);
     int putResponseCode = http.PUT(requestBody);
 
     if (putResponseCode == 200 || putResponseCode == 201) {
@@ -317,7 +349,7 @@ String getCurrentDateTime() {
   time_t now = timeClient.getEpochTime();
   struct tm* timeinfo = localtime(&now);
   char buffer[25];
-  sprintf(buffer, "%02d/%02d/%04d %02d:%02d:%02d", timeinfo->tm_mday, timeinfo->tm_mon + 1, timeinfo->tm_year + 1900, timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
+  sprintf(buffer, "%02d-%02d-%04d %02d:%02d:%02d", timeinfo->tm_mday, timeinfo->tm_mon + 1, timeinfo->tm_year + 1900, timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
   return String(buffer);
 }
 
@@ -353,3 +385,4 @@ void extractPadelNameAndCourtNr(){
     courtNr = "default";
   }
 }
+

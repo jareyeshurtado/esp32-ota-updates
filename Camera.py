@@ -1,12 +1,29 @@
 import subprocess
 import datetime
 import os
+import requests
 
-VIDEO_DURATION = 60  # Aqui solo se pondrian 3600 segundos para que grabe 1 hora continua
-FINAL_VIDEO_DURATION = 10  # aqui se pondrian los 30 o 45 o lo que sea segundos que vayamos a guardar para ellos
+#TODO: Add in the config.json file the video duration and the Final Video Duration 
+BUFFER_VIDEO_DURATION = 20  # Aqui solo se pondrian 3600 segundos para que grabe 1 hora continua
+FINAL_VIDEO_DURATION = 5  # aqui se pondrian los 30 o 45 o lo que sea segundos que vayamos a guardar para ellos
 webcam_input = "video=Integrated Webcam"
 log_filename = "timestamps.log"
+#For getting timestamps.log
+ESP32_IP = "192.168.100.50"
+URL = f"http://{ESP32_IP}/timestamps.log"
 
+def fetch_file():
+    try:
+        response = requests.get(URL)
+        if response.status_code == 200:
+            with open("timestamps.log", "w") as file:
+                file.write(response.text)
+            print("File saved successfully!")
+        else:
+            print("Failed to fetch file, status code:", response.status_code)
+    except requests.exceptions.RequestException as e:
+        print("Error:", e)
+        
 def read_log_file():
     """Reads timestamps from the log file and returns them as datetime objects."""
     if os.path.exists(log_filename):
@@ -25,7 +42,7 @@ def read_log_file():
 def extract_clip(full_video, video_start_time, clip_timestamp):
     """Extracts a FINAL_VIDEO_DURATION-second clip ending at clip_timestamp."""
     # Calculate the clip's start seconds relative to the beginning of the video
-    clip_start_seconds = (clip_timestamp - video_start_time).total_seconds() - FINAL_VIDEO_DURATION
+    clip_start_seconds = (clip_timestamp - video_start_time).total_seconds() - FINAL_VIDEO_DURATION + 1
 
     print(f"############### {clip_timestamp} ###################")
     print(f"############### Clip start time (relative): {clip_start_seconds} ###################")
@@ -63,7 +80,7 @@ def extract_clip(full_video, video_start_time, clip_timestamp):
 def process_video(video_filename, video_start_time):
     """Processes the recorded video: extracts necessary clips and deletes the full video."""
     log_dates = read_log_file()
-    video_end_time = video_start_time + datetime.timedelta(seconds=VIDEO_DURATION)
+    video_end_time = video_start_time + datetime.timedelta(seconds=BUFFER_VIDEO_DURATION)
 
     extracted = False
     for log_date in log_dates:
@@ -88,12 +105,12 @@ def record_video():
                 "-rtbufsize", "150M", #probablemente ocupemos mas buffer para videos de 1 hora
                 "-c:a", "aac",
                 "-i", webcam_input,
-                "-t", str(VIDEO_DURATION),
+                "-t", str(BUFFER_VIDEO_DURATION),
                 "-y",  # Overwrite output file if it exists
                 "temp_video.mp4"
             ]
 
-            print(f"Recording video for {VIDEO_DURATION} seconds...")
+            print(f"Recording video for {BUFFER_VIDEO_DURATION} seconds...")
             subprocess.run(ffmpeg_command, check=True)
 
             # Save the recorded video with a timestamped filename
@@ -101,7 +118,7 @@ def record_video():
             filename = f"{end_time.strftime('%Y-%m-%d_%H-%M-%S')}.mp4"
             os.rename("temp_video.mp4", filename)
             print(f"Recording complete. Video saved as {filename}")
-
+            fetch_file()
             # Process the recorded video
             process_video(filename, start_time)
 
@@ -116,6 +133,7 @@ def record_video():
             final_filename = f"{final_timestamp}.mp4"
             os.rename("temp_video.mp4", final_filename)
             print(f"Final video saved as {final_filename}")
+            fetch_file()
             process_video(final_filename, datetime.datetime.now())
         except FileNotFoundError:
             print("No final video to save.")

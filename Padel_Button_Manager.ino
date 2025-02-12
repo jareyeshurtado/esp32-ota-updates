@@ -1,5 +1,6 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <WebServer.h>
 #include <HTTPClient.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
@@ -9,7 +10,7 @@
 #include "mbedtls/base64.h"
 
 #define FILESYSTEM LittleFS
-#define FIRMWAREVERSION "v0.4"
+#define FIRMWAREVERSION "v0.5"
 
 #define MANUAL_UPDATE 0
 #define TIME_UPDATE   1
@@ -19,8 +20,17 @@ const char* gitLogUrl = "https://api.github.com/repos/jareyeshurtado/esp32-ota-u
 const char* gitKeyFilePath = "/git_key.json";  // Path for the GitHub key file
 String gitToken;  // Store the GitHub key
 
+// Static IP configuration
+// TODO: Add the IP Address into the config.json file
+IPAddress local_IP(192, 168, 100, 50); // Set your desired IP 
+IPAddress gateway(192, 168, 100, 1);    // Router IP (usually .1)
+IPAddress subnet(255, 255, 255, 0);
+IPAddress primaryDNS(8, 8, 8, 8);  // Google DNS
+IPAddress secondaryDNS(8, 8, 4, 4); // Google DNS
+
 #define STATUS_LED_BUILTIN 2  // Status LED Pin (using built-in LED for now)
 
+WebServer server(80);
 HTTPClient http;
 WiFiClientSecure client;
 WiFiUDP ntpUDP;
@@ -28,9 +38,12 @@ NTPClient timeClient(ntpUDP, "pool.ntp.org", -6 * 3600);
 
 const int timestampButton = 13;
 const int updateButton = 12;
+const unsigned long debounceDelay = 5000; // REPLACE HERE FOR THE DELAY TO HAVE BETWEEN POINTS SAVED
 bool buttonPressed = false;
 unsigned long lastDebounceTime = 0;
-const unsigned long debounceDelay = 5000;
+
+
+String logData = "";  // Stores all timestamps
 
 String ssid, password, boardID, postUrl;
 int updHour, updMinute;
@@ -62,6 +75,12 @@ void setup() {
   connectToWiFi();
   timeClient.begin();
   timeClient.update();  // Initial sync
+
+  // Define endpoints
+  server.on("/timestamps.log", handleFileRequest);  // Get timestamps
+  server.on("/clear", handleClearLog);        // Clear log
+  server.begin();
+
   validateAndSyncTime();  // Ensure valid time at startup
   extractPadelNameAndCourtNr();
   client.setInsecure();
@@ -70,6 +89,7 @@ void setup() {
 void loop() {
   timeClient.update();
   validateAndSyncTime();  // Check and correct invalid time
+  server.handleClient();
   bool CheckedForUpdate = false;
 
   int timestampButtonState = digitalRead(timestampButton);
@@ -145,15 +165,17 @@ bool loadConfig() {
 
 void connectToWiFi() {
   Serial.print("Connecting to Wi-Fi");
+  WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS);
   WiFi.begin(ssid.c_str(), password.c_str());
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
     Serial.print(".");
   }
-  Serial.println("\nConnected to Wi-Fi");
+  Serial.println("\nWiFi connected! IP: " + WiFi.localIP().toString());
   digitalWrite(STATUS_LED_BUILTIN, HIGH);  // Indicate board is ready
 }
 
+// TODO: Check if the SendPostRequest is still needed or not
 void sendPostRequest() {
   String currentTime = getCurrentDateTime();
   if (WiFi.status() == WL_CONNECTED) {
@@ -176,6 +198,9 @@ void sendPostRequest() {
   } else {
     Serial.println("Wi-Fi not connected");
   }
+  String formattedTime = reformatDateTime(currentTime);
+  // Log timestamp locally
+  logTimestamp(formattedTime);
 }
 
 void checkForFirmwareUpdate(int updReason) {
@@ -386,3 +411,33 @@ void extractPadelNameAndCourtNr(){
   }
 }
 
+// CODE FOR SENDING LOG DATA 
+void handleFileRequest() {
+    server.send(200, "text/plain", logData);  // Send all logs
+}
+
+void handleClearLog() {
+    logData = "";  // Clear the log
+    server.send(200, "text/plain", "Log cleared!");
+}
+
+void logTimestamp(const String& timestamp) {
+    //String timestamp = getCurrentDateTime();
+    logData += timestamp + "\n";  // Append timestamp to log
+    Serial.println("Logged: " + timestamp);
+}
+
+String reformatDateTime(String dt) {
+    // Extract day, month, year, hour, minutes, and seconds
+    String day = dt.substring(0, 2);
+    String month = dt.substring(3, 5);
+    String year = dt.substring(6, 10);
+    String hour = dt.substring(11, 13);
+    String minute = dt.substring(14, 16);
+    String second = dt.substring(17, 19);
+
+    // Construct the new format: Year-Month-Day_Hour-Minutes-Seconds
+    String formattedTime = year + "-" + month + "-" + day + "_" + hour + "-" + minute + "-" + second;
+    
+    return formattedTime;
+}

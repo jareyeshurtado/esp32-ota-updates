@@ -8,201 +8,332 @@
 #include <ArduinoJson.h>
 #include <HTTPUpdate.h>
 #include "mbedtls/base64.h"
+#include <esp_task_wdt.h>
 
+// General
 #define FILESYSTEM LittleFS
-#define FIRMWAREVERSION "v0.5"
+#define FIRMWAREVERSION "v0.6"
 
+// Watchdog
+#define WDT_TIMEOUT 500
+
+// OTA updates
 #define MANUAL_UPDATE 0
 #define TIME_UPDATE   1
-
-const char* configFilePath = "/config.json";  // Path for the configuration file
+const char* configFilePath = "/config.json";
 const char* gitLogUrl = "https://api.github.com/repos/jareyeshurtado/esp32-ota-updates/contents/";
-const char* gitKeyFilePath = "/git_key.json";  // Path for the GitHub key file
-String gitToken;  // Store the GitHub key
+const char* gitKeyFilePath = "/git_key.json";
+String gitToken;
+int updHour, updMinute;
 
-// Static IP configuration
-// TODO: Add the IP Address into the config.json file
-IPAddress local_IP(192, 168, 100, 50); // Set your desired IP 
-IPAddress gateway(192, 168, 100, 1);    // Router IP (usually .1)
-IPAddress subnet(255, 255, 255, 0);
-IPAddress primaryDNS(8, 8, 8, 8);  // Google DNS
-IPAddress secondaryDNS(8, 8, 4, 4); // Google DNS
+// IOs
+#define STATUS_LED_BUILTIN 2
+#define TOGGLELED 12  
+#define PUSHBUTTON 13
 
-#define STATUS_LED_BUILTIN 2  // Status LED Pin (using built-in LED for now)
+// Subscription
+#define MINUTECHECK 60000 // 60 * 1000
+#define HOURCHECK 3600000 // 60 * 60 * 1000
+#define DAILYCHECK 86400000 // 24 * 60 * 60 * 1000
+unsigned long lastCheck = 0;
+bool subscription_active = false; // Default to active
+const char* google_sheets_url = "https://script.google.com/macros/s/AKfycbwjCztF96qVGNGBfEOEnzHAK9a8_3yI8h8ikaH3OGLDINDcUKJyr9K_AhQgN7VS42UN/exec";
 
-WebServer server(80);
+// States Push Button Logic
+#define UPDATEDURATION 10000 // 10 seconds for OTA update
+#define REBOOTDURATION 5000 // 5 seconds for reboot
+bool buttonPressed = false;
+const unsigned long debounceDelay = 50; // Short debounce
+unsigned long buttonPressTime = 0;
+
+// Toggle Led 
+bool outputState = LOW;  // Store the state of the output 
+long lastToggletime = 0;
+
+// Timestamp logic
+unsigned long lastTimestampSent = 0; // Tracks last timestamp sent
+long cooldownPeriod; // 5 seconds
+
+// UDP 
+WiFiUDP udp;
+const char* broadcastIP = "192.168.1.255"; // UDP broadcast
+int udpPort;
+
+// Wifi & NTP Logic
+WiFiUDP ntpUDP;
 HTTPClient http;
 WiFiClientSecure client;
-WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", -6 * 3600);
+String ssid, password, boardID;
 
-const int timestampButton = 13;
-const int updateButton = 12;
-const unsigned long debounceDelay = 5000; // REPLACE HERE FOR THE DELAY TO HAVE BETWEEN POINTS SAVED
-bool buttonPressed = false;
-unsigned long lastDebounceTime = 0;
+// heartbeat
+int heartBeatPort;
+unsigned long lastHeartbeat = 0;
+unsigned long heartBeatTimeout = 5000;  // 5 seconds timeout
 
-
-String logData = "";  // Stores all timestamps
-
-String ssid, password, boardID, postUrl;
-int updHour, updMinute;
+// more config variables
 String padelName, courtNr;
 
 void setup() {
+  // Serial Begin
   Serial.begin(115200);
-  Serial.println(String("..... Starting Software : ") + FIRMWAREVERSION);
-  pinMode(STATUS_LED_BUILTIN, OUTPUT);  // Set status LED as output
-  digitalWrite(STATUS_LED_BUILTIN, LOW);  // Default to LOW (not ready)
-  pinMode(timestampButton, INPUT_PULLUP);
-  pinMode(updateButton, INPUT_PULLUP);
 
+  // watchdog
+  esp_task_wdt_config_t wdt_config = {
+        .timeout_ms = WDT_TIMEOUT * 1000, // Convert to milliseconds
+        .idle_core_mask = 0,              // Apply to all CPU cores
+        .trigger_panic = false            // Just reset ESP, no panic dump
+  };
+  esp_task_wdt_init(&wdt_config);  // Initialize watchdog
+  esp_task_wdt_add(NULL);          // Attach watchdog to the main loop
+
+  // Disable sleep mode
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+  WiFi.setSleep(false);  // Disable Wi-Fi power-saving mode
+
+  
+  // IOs
+  pinMode(STATUS_LED_BUILTIN, OUTPUT);
+  digitalWrite(STATUS_LED_BUILTIN, LOW);
+  pinMode(PUSHBUTTON, INPUT_PULLUP);
+  pinMode(TOGGLELED, OUTPUT);
+
+  // Start LittleFS To Read Config.json and git_key.json
   if (!FILESYSTEM.begin(true)) {
-    Serial.println("Failed to mount file system");
-    return;
+      Serial.println("Failed to mount file system");
+      return;
   }
 
+  // Load Config.json
   if (!loadConfig()) {
-    Serial.println("Failed to load config file");
-    return;
+      Serial.println("Failed to load config file");
+      return;
   }
+  extractPadelNameAndCourtNr();
 
+  // Load Git Key 
   if (!loadGitKey()) {
-    Serial.println("Failed to load GitHub key");
-    return;
+      Serial.println("Failed to load GitHub key");
+      return;
   }
 
+  // Wifi and NTP Client
   connectToWiFi();
   timeClient.begin();
-  timeClient.update();  // Initial sync
-
-  // Define endpoints
-  server.on("/timestamps.log", handleFileRequest);  // Get timestamps
-  server.on("/clear", handleClearLog);        // Clear log
-  server.begin();
-
-  validateAndSyncTime();  // Ensure valid time at startup
-  extractPadelNameAndCourtNr();
+  timeClient.update();
+  validateAndSyncTime();
   client.setInsecure();
+  
+  // Start UDP
+  udp.begin(udpPort);
+
+  // Start heartbeat
+  //udp.begin(heartBeatPort);
+  //Serial.print("📡 Listening for UDP broadcast on port ");
+  //Serial.println(heartBeatPort);
+
+  // Subscription
+  checkSubscription(); // Initial check
 }
 
 void loop() {
+
+  //bool CheckedForUpdate = false;
+
+  // watchdog reset
+  esp_task_wdt_reset();
+
+  // Wifi & NTP Client
   timeClient.update();
-  validateAndSyncTime();  // Check and correct invalid time
-  server.handleClient();
-  bool CheckedForUpdate = false;
+  validateAndSyncTime();
+  checkWiFiConnection();
 
-  int timestampButtonState = digitalRead(timestampButton);
-  int updateButtonState = digitalRead(updateButton);
+  // heartbeat
+  /*static unsigned long lastHeartbeatCheck = 0;
+  if (millis() - lastHeartbeatCheck >= 50) {  // Check every 50ms
+    lastHeartbeatCheck = millis();
+    HeartBeat();  // Call HeartBeat more frequently
+  }*/
 
-
-  if (timestampButtonState == LOW && (millis() - lastDebounceTime) > debounceDelay) {
-    lastDebounceTime = millis();
-    if (!buttonPressed) {
-      buttonPressed = true;
-      sendPostRequest();
+  // Toggle led logic
+  if ((millis() - lastToggletime) > 600000 ) { // every 10 minutes
+        outputState = !outputState;
+        digitalWrite(TOGGLELED, outputState);
+        Serial.println(outputState ? "Output ON" : "Output OFF");
+        lastToggletime = millis();
     }
-  } else if (timestampButtonState == HIGH) {
-    buttonPressed = false;
-  }
-
-  if (updateButtonState == LOW && (millis() - lastDebounceTime) > debounceDelay) {
-    lastDebounceTime = millis();
+    
+  // button handler logic
+  int buttonState = digitalRead(PUSHBUTTON);
+  if (buttonState == LOW) {
     if (!buttonPressed) {
       buttonPressed = true;
-      Serial.println("Checking for firmware and config updates Due To Button Pressed...");
+      buttonPressTime = millis();
+    }
+  } else if (buttonPressed) {
+    unsigned long pressDuration = millis() - buttonPressTime;
+    buttonPressed = false;
+
+    if (pressDuration >= UPDATEDURATION) {
+      Serial.println("🔄 Very Long press detected: Initiating OTA update...");
       checkForFirmwareUpdate(MANUAL_UPDATE);
-      CheckedForUpdate = true;
+      //CheckedForUpdate = true;
+    } else if (pressDuration >= REBOOTDURATION) {
+      Serial.println("🔄 Long press detected: Rebooting ESP32...");
+      esp_restart();
+    } else {
+      if ((millis() - lastTimestampSent >= cooldownPeriod) && !buttonPressed) {
+        Serial.println("⏳ Sending timestamp...");
+        sendTimestampUDP(getCurrentDateTime());
+        lastTimestampSent = millis();
+      } else {
+        Serial.println("⚠️ Cooldown active, ignoring...");
+      }
     }
-  } else if (updateButtonState == HIGH) {
-    buttonPressed = false;
   }
 
+  // OTA Update
   if (timeClient.getHours() == updHour && timeClient.getMinutes() == updMinute) {
     Serial.println("Checking for firmware and config updates due to Time Chosen in Config...");
     checkForFirmwareUpdate(TIME_UPDATE);
-    CheckedForUpdate = true;
+	  //CheckedForUpdate = true;
   }
-  if (CheckedForUpdate) {
-    delay(60000);
-    CheckedForUpdate = false;
+  //if (CheckedForUpdate) {
+    //delay(60000);
+    //CheckedForUpdate = false;
+  //}
+
+  // Subscription continuous Check
+  if (subscription_active){
+    if (millis() - lastCheck > DAILYCHECK) {
+      checkSubscription();
+      lastCheck = millis();
+    }
+  }else{
+    if (millis() - lastCheck > MINUTECHECK) {
+      checkSubscription();
+      lastCheck = millis();
+    }
+  }
+  
+}
+
+void checkSubscription() {
+  Serial.println("Checking subscription...");
+
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    String requestUrl = String(google_sheets_url) + "?device_id=" + boardID;
+    
+    //Serial.println("Request URL: " + requestUrl); // Debugging: print full URL
+    
+    http.begin(requestUrl);
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); // Handle Google redirects
+
+    int httpResponseCode = http.GET();
+    
+    //Serial.println("HTTP Response Code: " + String(httpResponseCode)); // Print response code
+
+    if (httpResponseCode > 0) {
+      String payload = http.getString();
+      Serial.println("Response: " + payload); // Print full response
+      
+      if (payload.indexOf("\"active\":false") != -1) {
+        subscription_active = false;
+        Serial.println("❌ Subscription expired! Stopping UDP...");
+        digitalWrite(STATUS_LED_BUILTIN, LOW); 
+      } else {
+        subscription_active = true;
+        Serial.println("✅ Subscription active! Continuing UDP...");
+        digitalWrite(STATUS_LED_BUILTIN, HIGH); 
+      }
+    } /*else {
+      Serial.println("⚠️ HTTP Request Failed, Error: " + String(httpResponseCode));
+    }*/
+
+    http.end();
+  } else {
+    subscription_active = false;
+    return;
   }
 }
 
+
+
+/** Sends the timestamp via UDP (broadcast) */
+void sendTimestampUDP(String timestamp) {
+  if (subscription_active) {
+    // check if wifi is connected if not save the timestamp to send it when we connect again
+    Serial.println("Broadcasting timestamp: " + timestamp);
+    
+    for (int i = 0; i < 3; i++) {
+      udp.beginPacket(broadcastIP, udpPort);
+      udp.print(timestamp);
+      udp.endPacket();
+      unsigned long start = millis();
+      while (millis() - start < 350); // Non-blocking wait
+    }
+  }
+  else
+  {
+    Serial.println("⛔ Subscription inactive. Not sending UDP.");
+  }
+}
+
+/** Load Configuration File */
 bool loadConfig() {
   File file = FILESYSTEM.open(configFilePath, "r");
-  if (!file) {
-    Serial.println("Failed to open config file");
-    return false;
-  }
+  if (!file) return false;
 
   StaticJsonDocument<256> jsonDoc;
-  DeserializationError error = deserializeJson(jsonDoc, file);
-  if (error) {
-    Serial.println("Failed to parse config file");
-    return false;
-  }
+  if (deserializeJson(jsonDoc, file)) return false;
 
   ssid = jsonDoc["ssid"].as<String>();
   password = jsonDoc["password"].as<String>();
   boardID = jsonDoc["boardID"].as<String>();
-  postUrl = jsonDoc["postUrl"].as<String>();
+  udpPort = jsonDoc["udpPort"].as<int>();
+  heartBeatPort = jsonDoc["heartBeatPort"].as<int>();
+  heartBeatTimeout = jsonDoc["heartBeatTimeout"].as<int>();
   updHour = jsonDoc["updHour"].as<int>();
   updMinute = jsonDoc["updMinute"].as<int>();
-
-  Serial.println("Config loaded:");
-  Serial.println("SSID: " + ssid);
-  Serial.println("Board ID: " + boardID);
-  Serial.println("Post URL: " + postUrl);
-  Serial.print("update daily time ");
-  Serial.print(updHour);
-  Serial.print(":");
-  Serial.println(updMinute);
-
+  cooldownPeriod = jsonDoc["cooldownPeriod"].as<long>();
   file.close();
   return true;
 }
 
+/** Connect to WiFi */
 void connectToWiFi() {
   Serial.print("Connecting to Wi-Fi");
-  WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS);
   WiFi.begin(ssid.c_str(), password.c_str());
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.print(".");
-  }
-  Serial.println("\nWiFi connected! IP: " + WiFi.localIP().toString());
-  digitalWrite(STATUS_LED_BUILTIN, HIGH);  // Indicate board is ready
-}
 
-// TODO: Check if the SendPostRequest is still needed or not
-void sendPostRequest() {
-  String currentTime = getCurrentDateTime();
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {  // Limit retries
+      delay(1000);
+      Serial.print(".");
+      attempts++;
+      esp_task_wdt_reset();
+  }
+
   if (WiFi.status() == WL_CONNECTED) {
-    http.begin(client, postUrl);
-    http.addHeader("Content-Type", "application/json");
-
-    String jsonPayload = "{\"boardID\":\"" + boardID + "\", \"tmp\":\"" + currentTime + "\", \"Version\":\"" + FIRMWAREVERSION + "\"}";
-    Serial.println("Sending POST request with payload: " + jsonPayload);
-
-    int httpResponseCode = http.POST(jsonPayload);
-    if (httpResponseCode > 0) {
-      String response = http.getString();
-      Serial.println("Response Code: " + String(httpResponseCode));
-      Serial.println("Response Body: " + response);
-    } else {
-      Serial.println("POST error: " + String(httpResponseCode));
-    }
-
-    http.end();
+      Serial.println("\n✅ Wi-Fi connected! IP: " + WiFi.localIP().toString());
   } else {
-    Serial.println("Wi-Fi not connected");
+      Serial.println("❌ Wi-Fi failed! Restarting ESP32...");
+      delay(100);
+      esp_restart();  // Safe reset
   }
-  String formattedTime = reformatDateTime(currentTime);
-  // Log timestamp locally
-  logTimestamp(formattedTime);
 }
 
+
+/** Fetch current date and time */
+String getCurrentDateTime() {
+    time_t now = timeClient.getEpochTime();
+    struct tm* timeinfo = localtime(&now);
+    char buffer[25];
+    sprintf(buffer, "%04d-%02d-%02d_%02d-%02d-%02d", timeinfo->tm_year + 1900, timeinfo->tm_mon + 1, timeinfo->tm_mday, timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
+    return String(buffer);
+}
+
+/** OTA Update Logic */
 void checkForFirmwareUpdate(int updReason) {
   String updateUrl = "https://raw.githubusercontent.com/jareyeshurtado/esp32-ota-updates/main/Padel_Button_Manager.ino.bin";
   String configUrl = "https://raw.githubusercontent.com/jareyeshurtado/esp32-ota-updates/main/" + padelName + "/config_" + courtNr + ".json";
@@ -235,17 +366,19 @@ void checkForFirmwareUpdate(int updReason) {
   // Perform OTA Update last
   Serial.println("Starting firmware update...");
   t_httpUpdate_return result = httpUpdate.update(client, updateUrl);
-
   if (result != HTTP_UPDATE_OK) {
-    Serial.println("Firmware update failed: " + String(httpUpdate.getLastErrorString()));
+      Serial.println("⚠️ OTA failed, rebooting in 10s...");
+      delay(10000);
+      esp_restart();  // Safe reboot
   }
 
   Serial.println("Firmware update complete. Synchronizing NTP...");
-  timeClient.end();  // Stop any previous NTP activity
-  timeClient.begin();  // Start fresh
-  timeClient.update();  // Force immediate sync
+  timeClient.end();
+  timeClient.begin();
+  timeClient.update();
 }
 
+/** Synchronize Time */
 void validateAndSyncTime() {
   time_t now = timeClient.getEpochTime();
   if (now < 946684800 || now > 1893456000) {  // Check if time is outside 2000 to 2030 range
@@ -289,14 +422,20 @@ bool logUpdateStatus(const String& updateType, bool logTime, int updReason) {
       String encodedContent = jsonResponse["content"].as<String>();
 
       size_t decodedLen = 0;
-      unsigned char* decodedOutput = (unsigned char*)malloc(4096);  // Heap allocation
-      if (decodedOutput == nullptr) {
-        Serial.println("Memory allocation failed!");
-        return false;
+      unsigned char* decodedOutput = (unsigned char*)malloc(4096);
+      if (!decodedOutput) {
+          Serial.println("Memory allocation failed!");
+          return false;
       }
+      if (mbedtls_base64_decode(decodedOutput, 4096, &decodedLen,
+                              (const unsigned char*)encodedContent.c_str(), 
+                              encodedContent.length()) != 0) {
+          free(decodedOutput);
+          Serial.println("Base64 decoding failed!");
+          return false;
+      }
+      free(decodedOutput); // Ensure memory is released
 
-      mbedtls_base64_decode(decodedOutput, 4096, &decodedLen,
-                            (const unsigned char*)encodedContent.c_str(), encodedContent.length());
       existingContent = String((char*)decodedOutput, decodedLen);
       free(decodedOutput);  // Free memory
       fileExists = true;
@@ -358,7 +497,7 @@ bool logUpdateStatus(const String& updateType, bool logTime, int updReason) {
   return false;
 }
 
-String base64Encode(const String& input) {
+/*String base64Encode(const String& input) {
   size_t encodedLen = (input.length() + 2) / 3 * 4;
   unsigned char encodedOutput[encodedLen + 1]; // Ensure space for null-terminator
   size_t writtenLen = 0;
@@ -368,76 +507,63 @@ String base64Encode(const String& input) {
 
   encodedOutput[writtenLen] = '\0';  // Null-terminate the string
   return String((char*)encodedOutput);
-}
-
-String getCurrentDateTime() {
-  time_t now = timeClient.getEpochTime();
-  struct tm* timeinfo = localtime(&now);
-  char buffer[25];
-  sprintf(buffer, "%02d-%02d-%04d %02d:%02d:%02d", timeinfo->tm_mday, timeinfo->tm_mon + 1, timeinfo->tm_year + 1900, timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
-  return String(buffer);
-}
+}*/
 
 bool loadGitKey() {
-  File file = FILESYSTEM.open(gitKeyFilePath, "r");
-  if (!file) {
-    Serial.println("Failed to open GitHub key file");
-    return false;
+    File file = FILESYSTEM.open(gitKeyFilePath, "r");
+    if (!file) return false;
+
+    StaticJsonDocument<128> jsonDoc;
+    if (deserializeJson(jsonDoc, file)) return false;
+
+    gitToken = jsonDoc["githubToken"].as<String>();
+    file.close();
+    return true;
+}
+
+/** Extracts Padel Name & Court Number */
+void extractPadelNameAndCourtNr() {
+    int underscoreIndex = boardID.indexOf('_');
+    if (underscoreIndex != -1) {
+        padelName = boardID.substring(0, underscoreIndex);
+        courtNr = boardID.substring(underscoreIndex + 1);
+    } else {
+        padelName = "default";
+        courtNr = "default";
+    }
+}
+
+void checkWiFiConnection() {
+    static unsigned long lastCheck = 0;
+    if (millis() - lastCheck > 5000) {  // Check every 5 sec
+        lastCheck = millis();
+        if (WiFi.status() != WL_CONNECTED) {
+            Serial.println("⚠️ Wi-Fi lost! Reconnecting...");
+            WiFi.disconnect();
+            WiFi.reconnect();
+        }
+    }
+}
+/*
+void HeartBeat() {
+  while (udp.parsePacket()) {  // Read ALL available packets
+    char packet[10];  // Buffer for received data
+    int len = udp.read(packet, sizeof(packet) - 1);
+    if (len > 0) {
+      packet[len] = '\0';  // Null-terminate the string
+    }
+
+    Serial.print("📩 Received: ");
+    Serial.println(packet);
+
+    if (strcmp(packet, "alive") == 0) {
+      digitalWrite(STATUS_LED_BUILTIN, HIGH);  // Turn LED on
+      lastHeartbeat = millis();  // Update last received time
+    }
   }
 
-  StaticJsonDocument<128> jsonDoc;
-  DeserializationError error = deserializeJson(jsonDoc, file);
-  if (error) {
-    Serial.println("Failed to parse GitHub key file");
-    return false;
+  // Check if the heartbeat has timed out
+  if (millis() - lastHeartbeat > heartBeatTimeout) {
+    digitalWrite(STATUS_LED_BUILTIN, LOW);  // Turn LED off
   }
-
-  gitToken = jsonDoc["githubToken"].as<String>();
-  Serial.println("GitHub token loaded successfully");
-
-  file.close();
-  return true;
-}
-
-void extractPadelNameAndCourtNr(){
-  // Extract Padel Name and Court Nr from boardID file
-  int underscoreIndex = boardID.indexOf('_');
-  if (underscoreIndex != -1) {
-    padelName = boardID.substring(0, underscoreIndex);
-    courtNr = boardID.substring(underscoreIndex + 1);
-  } else {
-    padelName = "default";
-    courtNr = "default";
-  }
-}
-
-// CODE FOR SENDING LOG DATA 
-void handleFileRequest() {
-    server.send(200, "text/plain", logData);  // Send all logs
-}
-
-void handleClearLog() {
-    logData = "";  // Clear the log
-    server.send(200, "text/plain", "Log cleared!");
-}
-
-void logTimestamp(const String& timestamp) {
-    //String timestamp = getCurrentDateTime();
-    logData += timestamp + "\n";  // Append timestamp to log
-    Serial.println("Logged: " + timestamp);
-}
-
-String reformatDateTime(String dt) {
-    // Extract day, month, year, hour, minutes, and seconds
-    String day = dt.substring(0, 2);
-    String month = dt.substring(3, 5);
-    String year = dt.substring(6, 10);
-    String hour = dt.substring(11, 13);
-    String minute = dt.substring(14, 16);
-    String second = dt.substring(17, 19);
-
-    // Construct the new format: Year-Month-Day_Hour-Minutes-Seconds
-    String formattedTime = year + "-" + month + "-" + day + "_" + hour + "-" + minute + "-" + second;
-    
-    return formattedTime;
-}
+}*/

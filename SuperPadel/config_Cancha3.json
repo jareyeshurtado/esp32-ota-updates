@@ -1,0 +1,12 @@
+{
+  "firmwareVersion": "1",
+  "ssid": "INFINITUM0EAE",
+  "password": "Pue3XVwcpW",
+  "boardID": "SuperPadel_Cancha2",
+  "udpPort": 20002,
+  "heartBeatPort": 20028,
+  "heartBeatTimeout": 5000,
+  "updHour": 26,
+  "updMinute": 28, 
+  "cooldownPeriod" : 25000
+}

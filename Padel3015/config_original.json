@@ -1,10 +1,10 @@
 {
   "firmwareVersion": "1",
   "isDemo" : 0,
-  "ssid": "INFINITUM7D9C_2.4",
-  "password": "H99UPcpsWe",
+  "ssid": "INFINITUM81AD",
+  "password": "UxR9HNXFqd",
   "boardID": "Padel3015_Cancha3",
-  "udpPort": 20001,
+  "udpPort": 20003,
   "heartBeatPort": 20028,
   "heartBeatTimeout": 5000,
   "updHour": 28,

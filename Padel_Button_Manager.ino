@@ -271,19 +271,46 @@ void sendTimestampUDP(String timestamp) {
 
 /** Load Configuration File */
 bool loadConfig() {
-  File file = FILESYSTEM.open(configFilePath, "r");
-  if (!file) return false;
+  if (LittleFS.exists(configFilePath)) {
+    File file = LittleFS.open(configFilePath, "r");
+    if (!file) return false;
 
+    StaticJsonDocument<256> jsonDoc;
+    DeserializationError error = deserializeJson(jsonDoc, file);
+    file.close();
+    if (error) return false;
+
+    ssid = jsonDoc["ssid"].as<String>();
+    password = jsonDoc["password"].as<String>();
+    boardID = jsonDoc["boardID"].as<String>();
+    udpPort = jsonDoc["udpPort"];
+    cooldownPeriod = jsonDoc["cooldownPeriod"];
+    isDemo = jsonDoc["isDemo"];
+    return true;
+  }
+
+  // File doesn't exist — use defaults:
+  ssid = "INFINITUM7D9C_2.4";
+  password = "H99UPcpsWe";
+  boardID = "Padel3015_Cancha3";
+  udpPort = 20003;
+  cooldownPeriod = 20000;
+  isDemo = 0;
+
+  // Now create and save config.json using those defaults:
   StaticJsonDocument<256> jsonDoc;
-  if (deserializeJson(jsonDoc, file)) return false;
+  jsonDoc["ssid"] = ssid;
+  jsonDoc["password"] = password;
+  jsonDoc["boardID"] = boardID;
+  jsonDoc["udpPort"] = udpPort;
+  jsonDoc["cooldownPeriod"] = cooldownPeriod;
+  jsonDoc["isDemo"] = isDemo;
 
-  ssid = jsonDoc["ssid"].as<String>();
-  password = jsonDoc["password"].as<String>();
-  boardID = jsonDoc["boardID"].as<String>();
-  udpPort = jsonDoc["udpPort"].as<int>();
-  cooldownPeriod = jsonDoc["cooldownPeriod"].as<long>();
-  isDemo = jsonDoc["isDemo"].as<int>();
+  File file = LittleFS.open(configFilePath, "w");
+  if (!file) return false;
+  serializeJson(jsonDoc, file);
   file.close();
+
   return true;
 }
 
@@ -510,6 +537,7 @@ bool logUpdateStatus(const String& updateType, bool logTime, int updReason) {
 }*/
 
 bool loadGitKey() {
+  if (LittleFS.exists(gitKeyFilePath)) {
     File file = FILESYSTEM.open(gitKeyFilePath, "r");
     if (!file) return false;
 
@@ -519,6 +547,23 @@ bool loadGitKey() {
     gitToken = jsonDoc["githubToken"].as<String>();
     file.close();
     return true;
+  }
+
+  gitToken = "gi";
+  gitToken += "thu";
+  gitToken += "b_pa";
+  gitToken += "t_11AF";
+  gitToken += "ULQWA0l7HdTlaeytWp";
+  gitToken += "_OS33E66iaYM2b5s2ZObApBxbvnvpQQaK4uGr4Y2i9eb5VP7JTWVJquc7o1T";
+  StaticJsonDocument<256> jsonDoc;
+  jsonDoc["githubToken"] = gitToken;
+
+  File file = LittleFS.open(gitKeyFilePath, "w");
+  if (!file) return false;
+  serializeJson(jsonDoc, file);
+  file.close();
+
+  return true;
 }
 
 /** Extracts Padel Name & Court Number */

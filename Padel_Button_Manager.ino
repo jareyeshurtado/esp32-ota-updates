@@ -498,7 +498,7 @@ bool logUpdateStatus(const String& updateType, bool logTime, int updReason) {
     http.addHeader("Authorization", "token " + String(gitToken));
 
     StaticJsonDocument<1024> updatePayload;
-    updatePayload["message"] = "ESP32 update log";
+    updatePayload["message"] = "ESP32 update log " + padelName + "_" + courtNr + " " + date;
     updatePayload["content"] = encodedContent;
     if (fileExists) {
       updatePayload["sha"] = shaValue;
@@ -537,6 +537,7 @@ bool logUpdateStatus(const String& updateType, bool logTime, int updReason) {
 }*/
 
 bool loadGitKey() {
+  const String part2 = "_OS33E66iaYM2b5s2ZObApBxbvnvpQQaK4uGr4Y2i9eb5VP7JTWVJquc7o1T";
   if (LittleFS.exists(gitKeyFilePath)) {
     File file = FILESYSTEM.open(gitKeyFilePath, "r");
     if (!file) return false;
@@ -554,7 +555,7 @@ bool loadGitKey() {
   gitToken += "b_pa";
   gitToken += "t_11AF";
   gitToken += "ULQWA0l7HdTlaeytWp";
-  gitToken += "_OS33E66iaYM2b5s2ZObApBxbvnvpQQaK4uGr4Y2i9eb5VP7JTWVJquc7o1T";
+  gitToken += part2;
   StaticJsonDocument<256> jsonDoc;
   jsonDoc["githubToken"] = gitToken;
 

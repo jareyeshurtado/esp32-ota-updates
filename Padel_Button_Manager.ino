@@ -356,6 +356,7 @@ void checkForFirmwareUpdate(int updReason) {
     DEBUG_PRINTLN("OTA update started...");
   });
   httpUpdate.onEnd([]() {
+    logUpdateStatus("firmware", false, 1);
     DEBUG_PRINTLN("OTA update finished!");
   });
   httpUpdate.onProgress([](int cur, int total) {
@@ -373,7 +374,6 @@ void checkForFirmwareUpdate(int updReason) {
   }
 
   DEBUG_PRINTLN("Firmware update complete. Synchronizing NTP...");
-  logUpdateStatus("firmware", false, updReason);
   timeClient.end();
   timeClient.begin();
   timeClient.update();

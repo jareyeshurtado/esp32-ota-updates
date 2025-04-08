@@ -328,7 +328,7 @@ void checkForFirmwareUpdate(int updReason) {
   DEBUG_PRINTLN("Logging firmware update attempt...");
 
   // Log the firmware update first
-  if (!logUpdateStatus("Firmware", true, updReason)) {
+  if (!logUpdateStatus("Start", true, updReason)) {
     DEBUG_PRINTLN("Failed to log firmware update status. Aborting OTA update.");
     return;  // Avoid OTA if logging fails
   }
@@ -373,6 +373,7 @@ void checkForFirmwareUpdate(int updReason) {
   }
 
   DEBUG_PRINTLN("Firmware update complete. Synchronizing NTP...");
+  logUpdateStatus("firmware", false, updReason);
   timeClient.end();
   timeClient.begin();
   timeClient.update();

@@ -1,8 +1,8 @@
 {
   "firmwareVersion": "1",
   "isDemo" : 0,
-  "ssid": "INFINITUM7D9C_2.4",
-  "password": "H99UPcpsWe",
+  "ssid": "Testi",
+  "password": "padel3015",
   "boardID": "Padel3015_Cancha3",
   "udpPort": 20001,
   "cooldownPeriod" : 20000

@@ -1,12 +1,10 @@
 {
   "firmwareVersion": "1",
-  "ssid": "INFINITUM0EAE",
-  "password": "Pue3XVwcpW",
+  "ssid": "INFINITUM7D9C_2.4",
+  "password": "H99UPcpsWe",
   "boardID": "SuperPadel_Cancha1",
   "udpPort": 20001,
-  "heartBeatPort": 20028,
-  "heartBeatTimeout": 5000,
-  "updHour": 26,
-  "updMinute": 28, 
-  "cooldownPeriod" : 25000
+  "cooldownPeriod" : 25000,
+  "isDemo" : 1,
+  "demoIP" : "192.168.100.255"
 }

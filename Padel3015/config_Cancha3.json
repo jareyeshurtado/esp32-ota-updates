@@ -5,5 +5,6 @@
   "password": "padel3015",
   "boardID": "Padel3015_Cancha3",
   "udpPort": 20001,
-  "cooldownPeriod" : 20000
+  "cooldownPeriod" : 20000,
+  "demoIP" : "187.133.197.255"
 }

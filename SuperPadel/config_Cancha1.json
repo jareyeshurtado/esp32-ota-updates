@@ -4,7 +4,7 @@
   "password": "H99UPcpsWe",
   "boardID": "SuperPadel_Cancha1",
   "udpPort": 20001,
-  "cooldownPeriod" : 25000,
-  "isDemo" : 1,
+  "cooldownPeriod" : 20000,
+  "isDemo" : 0,
   "demoIP" : "192.168.100.255"
 }

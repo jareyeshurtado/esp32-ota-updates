@@ -1,10 +1,10 @@
 {
   "firmwareVersion": "1",
-  "isDemo" : 0,
   "ssid": "Testi",
   "password": "padel3015",
   "boardID": "Padel3015_Cancha3",
-  "udpPort": 20001,
+  "udpPort": 20003,
   "cooldownPeriod" : 20000,
+  "isDemo" : 0,
   "demoIP" : "187.133.197.255"
 }

@@ -1,0 +1,10 @@
+{
+  "firmwareVersion": "1",
+  "ssid": "Home",
+  "password": "Emma&Luna<3",
+  "boardID": "PuntoPadel_Cancha2",
+  "udpPort": 20002,
+  "cooldownPeriod" : 20000,
+  "isDemo" : 1,
+  "demoIP" : "192.168.68.255"
+}

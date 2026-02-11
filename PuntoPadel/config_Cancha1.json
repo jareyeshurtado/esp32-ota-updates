@@ -1,10 +1,12 @@
 {
   "firmwareVersion": "1",
-  "ssid": "Home",
-  "password": "Emma&Luna<3",
+  "isDemo" : 0,
+  "ssid": "INFINITUM01B3",
+  "password": "nVUgwKf4uK",
   "boardID": "PuntoPadel_Cancha1",
   "udpPort": 20001,
   "cooldownPeriod" : 20000,
-  "isDemo" : 1,
-  "demoIP" : "192.168.68.255"
+  "demoIP" : "192.168.23.252",
+  "heartBeat2Server" : 3600,
+  "apiToken" : "bc490ade5e08c02e8583059c44d49545f8903fab"
 }
